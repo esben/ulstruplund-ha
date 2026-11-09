@@ -48,9 +48,16 @@ made.
 
 ## Deployment
 
-Either add this repository to HACS as a custom repository (type
-"Integration"), or copy/clone `custom_components/ulstruplund` into
-`/config/custom_components/`. Restart Home Assistant after updating.
+Install via [HACS](https://hacs.xyz/):
+
+1. HACS → ⋮ → Custom repositories → add
+   `https://github.com/esben/ulstruplund-ha` with type "Integration".
+2. Search for "Ulstruplund" in HACS and download it.
+3. Add the `ulstruplund:` configuration to `configuration.yaml` and restart
+   Home Assistant.
+
+Updates appear in HACS like for any other integration; restart Home
+Assistant after installing one.
 
 Remove the corresponding pyscript code (`heat.py`) at the same time, so the
 two don't fight over the same valves.

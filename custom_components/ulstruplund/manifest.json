@@ -1,11 +1,14 @@
 {
   "domain": "ulstruplund",
   "name": "Ulstruplund",
-  "codeowners": [],
+  "codeowners": [
+    "@esben"
+  ],
   "dependencies": [],
   "documentation": "https://github.com/esben/ulstruplund-ha",
   "integration_type": "helper",
   "iot_class": "calculated",
+  "issue_tracker": "https://github.com/esben/ulstruplund-ha/issues",
   "requirements": [],
   "version": "0.1.0"
 }
