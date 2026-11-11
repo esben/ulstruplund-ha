@@ -15,6 +15,14 @@ CONF_MAX_TEMP = "max_temp"
 CONF_COLD_TOLERANCE = "cold_tolerance"
 CONF_HOT_TOLERANCE = "hot_tolerance"
 CONF_REVERSE_FLOW_MARGIN = "reverse_flow_margin"
+CONF_CONTROL = "control"
+CONF_DEAD_TIME = "dead_time"
+CONF_LAG = "lag"
+CONF_HEATING_RATE = "heating_rate"
+CONF_COOLING_RATE = "cooling_rate"
+CONF_MIN_SWITCH_INTERVAL = "min_switch_interval"
+CONTROL_HYSTERESIS = "hysteresis"
+CONTROL_PREDICTIVE = "predictive"
 
 DEFAULT_SETPOINT = 32.0
 DEFAULT_MIN_TEMP = 15.0
@@ -22,6 +30,7 @@ DEFAULT_MAX_TEMP = 35.0
 DEFAULT_COLD_TOLERANCE = 0.5
 DEFAULT_HOT_TOLERANCE = 0.0
 DEFAULT_REVERSE_FLOW_MARGIN = 0.5
+DEFAULT_MIN_SWITCH_INTERVAL = timedelta(minutes=30)
 
 CONF_LIGHTS = "lights"
 CONF_LIGHT = "light"

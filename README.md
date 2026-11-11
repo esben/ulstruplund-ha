@@ -41,10 +41,49 @@ ulstruplund:
 | `cold_tolerance` | 0.5 | Open when floor is this much below setpoint |
 | `hot_tolerance` | 0.0 | Close when floor is more than this above setpoint |
 | `reverse_flow_margin` | 0.5 | Close when outflow exceeds inflow by more than this |
+| `control` | `hysteresis` | `hysteresis` or `predictive` (see below) |
+| `dead_time`, `lag` | | Floor model, required for predictive control |
+| `heating_rate`, `cooling_rate` | | Floor model (°C/h), required for predictive control |
+| `min_switch_interval` | 00:30:00 | Predictive control: minimum time between valve changes |
 
 The valve is closed when the thermostat is off or the floor sensor is
 unavailable. The `control_reason` attribute shows why the last decision was
 made.
+
+### Predictive control
+
+A floor reacts slowly: after the valve closes, the heat already in the
+floor keeps raising the temperature for a while, and after it opens, the
+floor keeps cooling until the warm water has heated it up. With hysteresis
+control, this makes the temperature overshoot and undershoot.
+
+Predictive control forecasts the floor temperature with a simple model of the
+floor, taking the valve's recent history into account:
+
+- the open valve is closed when the temperature would rise to more than
+  `hot_tolerance` above the setpoint even if the valve is closed now, and
+- the closed valve is opened when the temperature would drop to
+  `cold_tolerance` below the setpoint even if the valve is opened now.
+
+The model: the valve's effect is delayed by `dead_time` and smoothed by a
+first-order `lag`. With the valve fully open, the floor heats up with
+`heating_rate`; with the valve closed, it cools with `cooling_rate` (°C/h).
+These can be estimated from the floor temperature and valve history.
+
+```yaml
+      cold_tolerance: 0.1
+      hot_tolerance: 0.1
+      control: predictive
+      dead_time: "00:45:00"
+      lag: "00:30:00"
+      heating_rate: 0.55
+      cooling_rate: 0.38
+```
+
+The `forecast_max_if_closed` and `forecast_min_if_open` attributes show the
+current forecast. The valve history is kept across restarts. Safety closing
+(thermostat off, sensor unavailable, reverse flow) ignores
+`min_switch_interval`.
 
 ## Lights
 
@@ -137,7 +176,7 @@ uv sync
 uv run pytest
 ```
 
-`floor_control.py`, `light_control.py` and `styrbar.py` contain the control
+`floor_control.py`, `floor_model.py`, `light_control.py` and `styrbar.py` contain the control
 logic with no Home Assistant imports. `climate.py`, `lights.py` and
 `sensor.py` wire it to entity states, events and services. Tests in
 `tests/test_climate.py` and `tests/test_lights.py` run against a real Home

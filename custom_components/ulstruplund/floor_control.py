@@ -24,12 +24,29 @@ class Reason(StrEnum):
     BELOW_SETPOINT = "below_setpoint"
     ABOVE_SETPOINT = "above_setpoint"
     WITHIN_HYSTERESIS = "within_hysteresis"
+    FORECAST_BELOW_SETPOINT = "forecast_below_setpoint"
+    FORECAST_ABOVE_SETPOINT = "forecast_above_setpoint"
+    FORECAST_WITHIN_TOLERANCE = "forecast_within_tolerance"
+    MIN_SWITCH_INTERVAL = "min_switch_interval"
 
 
 @dataclass(frozen=True)
 class Decision:
     command: ValveCommand
     reason: Reason
+
+
+@dataclass(frozen=True)
+class Forecast:
+    """Forecast floor temperature, for predictive control."""
+
+    valve_open: bool
+    # Highest temperature reached if the valve is closed now
+    max_if_closed: float
+    # Lowest temperature reached if the valve is opened now
+    min_if_open: float
+    # Whether the minimum time since the last valve change has passed
+    can_switch: bool = True
 
 
 def _diff(a: float, b: float) -> float:
@@ -47,6 +64,7 @@ def decide(
     cold_tolerance: float = 0.5,
     hot_tolerance: float = 0.0,
     reverse_flow_margin: float = 0.5,
+    forecast: Forecast | None = None,
 ) -> Decision:
     """Decide what to do with the valve.
 
@@ -59,6 +77,13 @@ def decide(
     is skipped if inflow or outflow temperature is unknown.
 
     If the floor temperature is unknown, the valve is closed.
+
+    With a forecast (predictive control), the open valve is closed when the
+    temperature would rise to more than hot_tolerance above the setpoint even
+    if it is closed now, and the closed valve is opened when the temperature
+    would drop to cold_tolerance below the setpoint even if it is opened now.
+    The valve is not switched again until can_switch, except for the safety
+    reasons above.
     """
     if not enabled:
         return Decision(ValveCommand.CLOSE, Reason.OFF)
@@ -70,8 +95,27 @@ def decide(
         and _diff(inflow_temp, outflow_temp) < -reverse_flow_margin
     ):
         return Decision(ValveCommand.CLOSE, Reason.REVERSE_FLOW)
+    if forecast is not None:
+        return _decide_forecast(setpoint, cold_tolerance, hot_tolerance, forecast)
     if _diff(setpoint, floor_temp) >= cold_tolerance:
         return Decision(ValveCommand.OPEN, Reason.BELOW_SETPOINT)
     if _diff(floor_temp, setpoint) > hot_tolerance:
         return Decision(ValveCommand.CLOSE, Reason.ABOVE_SETPOINT)
     return Decision(ValveCommand.KEEP, Reason.WITHIN_HYSTERESIS)
+
+
+def _decide_forecast(
+    setpoint: float, cold_tolerance: float, hot_tolerance: float, forecast: Forecast
+) -> Decision:
+    if forecast.valve_open:
+        if _diff(forecast.max_if_closed, setpoint) >= hot_tolerance:
+            command, reason = ValveCommand.CLOSE, Reason.FORECAST_ABOVE_SETPOINT
+        else:
+            return Decision(ValveCommand.KEEP, Reason.FORECAST_WITHIN_TOLERANCE)
+    elif _diff(setpoint, forecast.min_if_open) >= cold_tolerance:
+        command, reason = ValveCommand.OPEN, Reason.FORECAST_BELOW_SETPOINT
+    else:
+        return Decision(ValveCommand.KEEP, Reason.FORECAST_WITHIN_TOLERANCE)
+    if not forecast.can_switch:
+        return Decision(ValveCommand.KEEP, Reason.MIN_SWITCH_INTERVAL)
+    return Decision(command, reason)

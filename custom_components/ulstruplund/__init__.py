@@ -11,16 +11,22 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_COLD_TOLERANCE,
+    CONF_CONTROL,
+    CONF_COOLING_RATE,
+    CONF_DEAD_TIME,
     CONF_FLOOR_HEATING,
     CONF_FLOOR_TEMP,
     CONF_GROUPS,
+    CONF_HEATING_RATE,
     CONF_HOT_TOLERANCE,
     CONF_IEEE,
     CONF_INFLOW_TEMP,
+    CONF_LAG,
     CONF_LIGHT,
     CONF_LIGHTS,
     CONF_MANUAL_TIMEOUT,
     CONF_MAX_TEMP,
+    CONF_MIN_SWITCH_INTERVAL,
     CONF_MIN_TEMP,
     CONF_MOTION_BRIGHTNESS,
     CONF_MOTION_SENSORS,
@@ -35,10 +41,13 @@ from .const import (
     CONF_SUNRISE_OFFSET,
     CONF_SUNSET_OFFSET,
     CONF_VALVE,
+    CONTROL_HYSTERESIS,
+    CONTROL_PREDICTIVE,
     DEFAULT_COLD_TOLERANCE,
     DEFAULT_HOT_TOLERANCE,
     DEFAULT_MANUAL_TIMEOUT,
     DEFAULT_MAX_TEMP,
+    DEFAULT_MIN_SWITCH_INTERVAL,
     DEFAULT_MIN_TEMP,
     DEFAULT_MOTION_BRIGHTNESS,
     DEFAULT_MOTION_TIMEOUT,
@@ -51,6 +60,18 @@ from .const import (
     REMOTE_TYPE_STYRBAR,
 )
 from .lights import LightControl, MotionSensor, StyrbarRemote
+
+RATE = vol.All(vol.Coerce(float), vol.Range(min=0, min_included=False))
+
+
+def _validate_predictive(conf: ConfigType) -> ConfigType:
+    """Predictive control needs the floor model."""
+    if conf[CONF_CONTROL] == CONTROL_PREDICTIVE:
+        model_keys = (CONF_DEAD_TIME, CONF_LAG, CONF_HEATING_RATE, CONF_COOLING_RATE)
+        if missing := [key for key in model_keys if key not in conf]:
+            raise vol.Invalid(f"predictive control requires {', '.join(missing)}")
+    return conf
+
 
 FLOOR_HEATING_SCHEMA = vol.Schema(
     {
@@ -72,6 +93,16 @@ FLOOR_HEATING_SCHEMA = vol.Schema(
         vol.Optional(
             CONF_REVERSE_FLOW_MARGIN, default=DEFAULT_REVERSE_FLOW_MARGIN
         ): vol.Coerce(float),
+        vol.Optional(CONF_CONTROL, default=CONTROL_HYSTERESIS): vol.In(
+            [CONTROL_HYSTERESIS, CONTROL_PREDICTIVE]
+        ),
+        vol.Optional(CONF_DEAD_TIME): cv.time_period,
+        vol.Optional(CONF_LAG): cv.time_period,
+        vol.Optional(CONF_HEATING_RATE): RATE,
+        vol.Optional(CONF_COOLING_RATE): RATE,
+        vol.Optional(
+            CONF_MIN_SWITCH_INTERVAL, default=DEFAULT_MIN_SWITCH_INTERVAL
+        ): cv.time_period,
     }
 )
 
@@ -141,7 +172,8 @@ CONFIG_SCHEMA = vol.Schema(
             vol.Schema(
                 {
                     vol.Optional(CONF_FLOOR_HEATING, default=[]): vol.All(
-                        cv.ensure_list, [FLOOR_HEATING_SCHEMA]
+                        cv.ensure_list,
+                        [vol.All(FLOOR_HEATING_SCHEMA, _validate_predictive)],
                     ),
                     vol.Optional(CONF_LIGHTS, default=[]): vol.All(
                         cv.ensure_list, [LIGHT_SCHEMA]
