@@ -109,7 +109,9 @@ async def test_safety_ignores_min_switch_interval(hass, freezer):
     )
     hass.states.async_set(FLOOR, "unavailable")
     await hass.async_block_till_done()
-    assert len(close_calls) == 1
+    await tick(hass, freezer, 6)
+    # Still within the 30 min since the valve opened
+    assert close_calls
 
 
 async def test_valve_history_restored(hass, freezer):

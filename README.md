@@ -47,8 +47,9 @@ ulstruplund:
 | `min_switch_interval` | 00:30:00 | Predictive control: minimum time between valve changes |
 | `adaptive` | true | Predictive control: keep estimating heating/cooling rates |
 
-The valve is closed when the thermostat is off or the floor sensor is
-unavailable. The `control_reason` attribute shows why the last decision was
+The valve is closed when the thermostat is off or the floor sensor has been
+unavailable for 5 minutes (sensors are often briefly unavailable after a
+restart). The `control_reason` attribute shows why the last decision was
 made.
 
 ### Predictive control

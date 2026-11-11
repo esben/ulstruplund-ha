@@ -1,6 +1,6 @@
 """Floor heating thermostats driving an on/off valve."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 
@@ -63,6 +63,9 @@ from .floor_model import STEP, FloorModel, History, RateEstimator, forecast
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long the floor sensor may be unavailable before closing the valve
+SENSOR_GRACE = timedelta(minutes=5)
+
 
 async def async_setup_platform(
     hass: HomeAssistant,
@@ -120,6 +123,7 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             self._estimator = RateEstimator(self._model)
         self._temps: History[float | None] = History()
         self._last_sample: datetime | None = None
+        self._floor_unavailable_since: datetime | None = None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -145,13 +149,13 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
                 self.hass, self._watched_entities, self._async_state_changed
             )
         )
-        if self._model is not None:
-            # The forecast changes with time, not only with sensor updates
-            self.async_on_remove(
-                async_track_time_interval(
-                    self.hass, self._async_tick, STEP, cancel_on_shutdown=True
-                )
+        # The forecast changes with time, not only with sensor updates, and an
+        # unavailable sensor needs to be acted on after SENSOR_GRACE
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, self._async_tick, STEP, cancel_on_shutdown=True
             )
+        )
         await self._async_control()
 
     @property
@@ -280,6 +284,12 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
         )
 
     async def _async_control(self) -> None:
+        now = dt_util.utcnow()
+        if self.current_temperature is None:
+            if self._floor_unavailable_since is None:
+                self._floor_unavailable_since = now
+        else:
+            self._floor_unavailable_since = None
         self._forecast = self._make_forecast(self.current_temperature)
         decision = decide(
             enabled=self._attr_hvac_mode == HVACMode.HEAT,
@@ -291,6 +301,8 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             hot_tolerance=self._hot_tolerance,
             reverse_flow_margin=self._reverse_flow_margin,
             forecast=self._forecast,
+            wait_for_sensor=self._floor_unavailable_since is not None
+            and now - self._floor_unavailable_since < SENSOR_GRACE,
         )
         if decision != self._decision:
             _LOGGER.info("%s: %s (%s)", self.entity_id, decision.command, decision.reason)

@@ -77,3 +77,14 @@ def test_reverse_flow_margin_is_exact():
         reverse_flow_margin=0.3,
     )
     assert decision.command == ValveCommand.OPEN
+
+
+def test_wait_for_sensor():
+    decision = decide(enabled=True, setpoint=32.0, floor_temp=None, wait_for_sensor=True)
+    assert (decision.command, decision.reason) == (
+        ValveCommand.KEEP,
+        Reason.SENSOR_UNAVAILABLE_WAITING,
+    )
+    # Not waiting with a valid temperature, or when turned off
+    decision = decide(enabled=False, setpoint=32.0, floor_temp=None, wait_for_sensor=True)
+    assert decision.reason == Reason.OFF

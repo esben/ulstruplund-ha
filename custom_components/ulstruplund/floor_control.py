@@ -20,6 +20,7 @@ class Reason(StrEnum):
 
     OFF = "off"
     SENSOR_UNAVAILABLE = "sensor_unavailable"
+    SENSOR_UNAVAILABLE_WAITING = "sensor_unavailable_waiting"
     REVERSE_FLOW = "reverse_flow"
     BELOW_SETPOINT = "below_setpoint"
     ABOVE_SETPOINT = "above_setpoint"
@@ -65,6 +66,7 @@ def decide(
     hot_tolerance: float = 0.0,
     reverse_flow_margin: float = 0.5,
     forecast: Forecast | None = None,
+    wait_for_sensor: bool = False,
 ) -> Decision:
     """Decide what to do with the valve.
 
@@ -76,7 +78,8 @@ def decide(
     water is pulling heat out of the floor, so the valve is closed. This check
     is skipped if inflow or outflow temperature is unknown.
 
-    If the floor temperature is unknown, the valve is closed.
+    If the floor temperature is unknown, the valve is closed, unless
+    wait_for_sensor (e.g. a sensor briefly unavailable after a restart).
 
     With a forecast (predictive control), the open valve is closed when the
     temperature would rise to more than hot_tolerance above the setpoint even
@@ -88,6 +91,8 @@ def decide(
     if not enabled:
         return Decision(ValveCommand.CLOSE, Reason.OFF)
     if floor_temp is None:
+        if wait_for_sensor:
+            return Decision(ValveCommand.KEEP, Reason.SENSOR_UNAVAILABLE_WAITING)
         return Decision(ValveCommand.CLOSE, Reason.SENSOR_UNAVAILABLE)
     if (
         inflow_temp is not None

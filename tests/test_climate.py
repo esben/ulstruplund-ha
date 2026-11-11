@@ -1,5 +1,7 @@
 """Tests for the floor thermostat climate entity."""
 
+from datetime import timedelta
+
 from homeassistant.components.climate import (
     DOMAIN as CLIMATE_DOMAIN,
     SERVICE_SET_HVAC_MODE,
@@ -11,6 +13,7 @@ from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE, STATE_UNAVAILA
 from homeassistant.core import HomeAssistant, State
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import (
+    async_fire_time_changed,
     async_mock_service,
     mock_restore_cache,
 )
@@ -44,8 +47,10 @@ async def setup(hass: HomeAssistant, *, floor="30.0", valve="closed",
                 inflow="35.0", outflow="30.0"):
     hass.states.async_set(FLOOR, floor)
     hass.states.async_set(VALVE, valve)
-    hass.states.async_set(INFLOW, inflow)
-    hass.states.async_set(OUTFLOW, outflow)
+    if inflow is not None:
+        hass.states.async_set(INFLOW, inflow)
+    if outflow is not None:
+        hass.states.async_set(OUTFLOW, outflow)
     open_calls = async_mock_service(hass, "valve", "open_valve")
     close_calls = async_mock_service(hass, "valve", "close_valve")
     assert await async_setup_component(hass, DOMAIN, CONFIG)
@@ -90,12 +95,37 @@ async def test_closes_on_reverse_flow(hass: HomeAssistant):
     assert hass.states.get(ENTITY).attributes["control_reason"] == "reverse_flow"
 
 
-async def test_closes_when_floor_sensor_unavailable(hass: HomeAssistant):
+async def tick(hass: HomeAssistant, freezer, minutes: int) -> None:
+    for _ in range(minutes):
+        freezer.tick(timedelta(minutes=1))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+
+async def test_closes_when_floor_sensor_unavailable(hass: HomeAssistant, freezer):
     open_calls, close_calls = await setup(hass, floor="30.0", valve="open")
 
     hass.states.async_set(FLOOR, STATE_UNAVAILABLE)
     await hass.async_block_till_done()
-    assert len(close_calls) == 1
+    assert not close_calls
+    state = hass.states.get(ENTITY)
+    assert state.attributes["control_reason"] == "sensor_unavailable_waiting"
+
+    await tick(hass, freezer, 4)
+    assert not close_calls
+    await tick(hass, freezer, 2)
+    assert close_calls
+
+
+async def test_floor_sensor_unavailable_at_startup(hass: HomeAssistant, freezer):
+    # After a restart, the sensor is briefly unavailable: leave the valve alone
+    open_calls, close_calls = await setup(
+        hass, floor=STATE_UNAVAILABLE, valve="open", inflow=None, outflow=None
+    )
+    await tick(hass, freezer, 1)
+    hass.states.async_set(FLOOR, "31.0")
+    await tick(hass, freezer, 10)
+    assert not close_calls
 
 
 async def test_set_temperature(hass: HomeAssistant):
