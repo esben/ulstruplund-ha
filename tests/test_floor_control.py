@@ -45,3 +45,35 @@ def test_reverse_flow(inflow, outflow, command):
         outflow_temp=outflow,
     )
     assert decision.command == command
+
+
+@pytest.mark.parametrize(
+    ("floor_temp", "command"),
+    [
+        (31.9, ValveCommand.KEEP),
+        (31.8, ValveCommand.OPEN),
+        (32.1, ValveCommand.KEEP),
+        (32.2, ValveCommand.CLOSE),
+    ],
+)
+def test_tolerances_are_exact(floor_temp, command):
+    decision = decide(
+        enabled=True,
+        setpoint=32.0,
+        floor_temp=floor_temp,
+        cold_tolerance=0.2,
+        hot_tolerance=0.1,
+    )
+    assert decision.command == command
+
+
+def test_reverse_flow_margin_is_exact():
+    decision = decide(
+        enabled=True,
+        setpoint=32.0,
+        floor_temp=20.0,
+        inflow_temp=30.1,
+        outflow_temp=30.4,
+        reverse_flow_margin=0.3,
+    )
+    assert decision.command == ValveCommand.OPEN

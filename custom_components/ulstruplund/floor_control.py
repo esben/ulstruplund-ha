@@ -32,6 +32,11 @@ class Decision:
     reason: Reason
 
 
+def _diff(a: float, b: float) -> float:
+    """Return a - b without floating point noise (32 - 31.8 is 0.1999...)."""
+    return round(a - b, 6)
+
+
 def decide(
     *,
     enabled: bool,
@@ -62,11 +67,11 @@ def decide(
     if (
         inflow_temp is not None
         and outflow_temp is not None
-        and (inflow_temp - outflow_temp) < -reverse_flow_margin
+        and _diff(inflow_temp, outflow_temp) < -reverse_flow_margin
     ):
         return Decision(ValveCommand.CLOSE, Reason.REVERSE_FLOW)
-    if (setpoint - floor_temp) >= cold_tolerance:
+    if _diff(setpoint, floor_temp) >= cold_tolerance:
         return Decision(ValveCommand.OPEN, Reason.BELOW_SETPOINT)
-    if (floor_temp - setpoint) > hot_tolerance:
+    if _diff(floor_temp, setpoint) > hot_tolerance:
         return Decision(ValveCommand.CLOSE, Reason.ABOVE_SETPOINT)
     return Decision(ValveCommand.KEEP, Reason.WITHIN_HYSTERESIS)
