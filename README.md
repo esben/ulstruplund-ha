@@ -45,6 +45,7 @@ ulstruplund:
 | `dead_time`, `lag` | | Floor model, required for predictive control |
 | `heating_rate`, `cooling_rate` | | Floor model (°C/h), required for predictive control |
 | `min_switch_interval` | 00:30:00 | Predictive control: minimum time between valve changes |
+| `adaptive` | true | Predictive control: keep estimating heating/cooling rates |
 
 The valve is closed when the thermostat is off or the floor sensor is
 unavailable. The `control_reason` attribute shows why the last decision was
@@ -84,6 +85,16 @@ The `forecast_max_if_closed` and `forecast_min_if_open` attributes show the
 current forecast. The valve history is kept across restarts. Safety closing
 (thermostat off, sensor unavailable, reverse flow) ignores
 `min_switch_interval`.
+
+With `adaptive` (the default), the heating and cooling rates are
+continuously re-estimated from the floor temperature and valve history, so
+they follow e.g. changes in the weather: every 30 minutes, the temperature
+change over the last 2 hours is compared with the heat that reached the floor
+according to the model. The configured rates are the starting point, and the
+estimates are kept within half to twice them. Changing the configured rates
+restarts the estimation. The `estimated_heating_rate` and
+`estimated_cooling_rate` attributes show the current estimates. `dead_time`
+and `lag` are not estimated.
 
 ## Lights
 

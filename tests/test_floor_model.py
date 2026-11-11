@@ -12,7 +12,9 @@ from custom_components.ulstruplund.floor_control import (
 )
 from custom_components.ulstruplund.floor_model import (
     FloorModel,
-    ValveHistory,
+    History,
+    History as ValveHistory,
+    RateEstimator,
     forecast,
 )
 
@@ -98,17 +100,29 @@ def test_forecast_safety_ignores_min_switch_interval():
     assert decision.reason == Reason.SENSOR_UNAVAILABLE
 
 
-def simulate(model: FloorModel, plant: FloorModel, days: int = 2):
+def simulate(
+    model: FloorModel,
+    plant: FloorModel,
+    days: int = 2,
+    estimator: RateEstimator | None = None,
+    settle: int = 720,
+):
     """Closed loop: plant with 0.1 °C sensor, predictive control every minute."""
     step_h = 1 / 60
     t = NOW
     valves = ValveHistory([(t - timedelta(days=1), False)])
+    sensor_history: History[float | None] = History()
     temp, x = 31.5, 0.0
     pipe = [0.0] * int(plant.dead_time / timedelta(minutes=1))
     alpha = 1 - 2.718281828 ** (-1 / (plant.lag / timedelta(minutes=1)))
     temps, switches = [], 0
     for i in range(days * 1440):
         sensor = round(temp, 1)
+        sensor_history.add(t, sensor)
+        if estimator is not None:
+            if i % 30 == 0:
+                estimator.sample(valves, sensor_history, t)
+            model = estimator.model
         is_open = bool(valves.state_at(t))
         last = valves.last_change or t
         decision = decide(
@@ -130,18 +144,18 @@ def simulate(model: FloorModel, plant: FloorModel, days: int = 2):
         elif decision.command == ValveCommand.CLOSE:
             valves.add(t, False)
             switches += 1
-        valves.prune(t - model.memory)
+        valves.prune(t - model.memory - RateEstimator.WINDOW)
         pipe.append(1.0 if valves.state_at(t) else 0.0)
         x += alpha * (pipe.pop(0) - x)
         temp += (plant.heating_rate * x - plant.cooling_rate) * step_h
-        if i >= 720:
+        if i >= settle:
             temps.append(temp)
         t += timedelta(minutes=1)
-    return min(temps), max(temps), switches / days
+    return min(temps), max(temps), switches / days, sum(abs(x - 32) for x in temps) / len(temps)
 
 
 def test_closed_loop_simulation():
-    low, high, switches_per_day = simulate(MODEL, MODEL)
+    low, high, switches_per_day, _ = simulate(MODEL, MODEL)
     assert 31.8 < low and high < 32.25
     assert switches_per_day < 30
 
@@ -153,5 +167,58 @@ def test_closed_loop_simulation_with_wrong_model():
         heating_rate=0.6,
         cooling_rate=0.3,
     )
-    low, high, _ = simulate(MODEL, plant)
+    low, high, _, _ = simulate(MODEL, plant)
     assert 31.7 < low and high < 32.35
+
+
+def test_estimator_learns_rates():
+    plant = FloorModel(
+        dead_time=MODEL.dead_time, lag=MODEL.lag, heating_rate=0.65, cooling_rate=0.48
+    )
+    estimator = RateEstimator(MODEL)
+    simulate(MODEL, plant, days=3, estimator=estimator)
+    assert estimator.heating_rate == pytest.approx(0.65, rel=0.1)
+    assert estimator.cooling_rate == pytest.approx(0.48, rel=0.1)
+
+
+def test_estimator_improves_control():
+    # With these rates, the configured model keeps the floor too warm
+    plant = FloorModel(
+        dead_time=MODEL.dead_time, lag=MODEL.lag, heating_rate=0.8, cooling_rate=0.25
+    )
+    *_, fixed_error = simulate(MODEL, plant, days=4, settle=2 * 1440)
+    *_, error = simulate(
+        MODEL, plant, days=4, settle=2 * 1440, estimator=RateEstimator(MODEL)
+    )
+    assert error < 0.7 * fixed_error
+
+
+def test_estimator_needs_history():
+    estimator = RateEstimator(MODEL)
+    valves = ValveHistory([(NOW - timedelta(hours=1), True)])
+    temps: History[float | None] = History([(NOW - timedelta(hours=5), 32.0)])
+    assert not estimator.sample(valves, temps, NOW)
+
+    valves = ValveHistory([(NOW - timedelta(hours=8), True)])
+    temps = History([(NOW - timedelta(hours=5), 32.0), (NOW - timedelta(hours=1), None)])
+    assert not estimator.sample(valves, temps, NOW)
+
+    temps = History([(NOW - timedelta(hours=5), 32.0), (NOW - timedelta(hours=1), 32.1)])
+    assert estimator.sample(valves, temps, NOW)
+
+
+def test_estimator_bounds_and_restore():
+    estimator = RateEstimator(MODEL)
+    for _ in range(200):
+        estimator.update(delta_temp=-2.0, heat_hours=2.0, hours=2.0)
+    assert estimator.heating_rate >= MODEL.heating_rate / 2
+    assert estimator.cooling_rate <= MODEL.cooling_rate * 2
+
+    restored = RateEstimator(MODEL)
+    restored.restore(estimator.as_dict())
+    assert restored.as_dict() == estimator.as_dict()
+
+    # Changed configuration: start over from it
+    other = RateEstimator(FloorModel(MODEL.dead_time, MODEL.lag, 0.6, 0.4))
+    other.restore(estimator.as_dict())
+    assert (other.heating_rate, other.cooling_rate) == (0.6, 0.4)

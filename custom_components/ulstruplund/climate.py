@@ -38,6 +38,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_ADAPTIVE,
     CONF_COLD_TOLERANCE,
     CONF_CONTROL,
     CONF_COOLING_RATE,
@@ -58,7 +59,7 @@ from .const import (
     DOMAIN,
 )
 from .floor_control import Decision, Forecast, ValveCommand, decide
-from .floor_model import STEP, FloorModel, ValveHistory, forecast
+from .floor_model import STEP, FloorModel, History, RateEstimator, forecast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,7 +114,12 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
                 cooling_rate=conf[CONF_COOLING_RATE],
             )
         self._min_switch_interval = conf[CONF_MIN_SWITCH_INTERVAL]
-        self._valves = ValveHistory()
+        self._valves: History[bool] = History()
+        self._estimator: RateEstimator | None = None
+        if self._model is not None and conf[CONF_ADAPTIVE]:
+            self._estimator = RateEstimator(self._model)
+        self._temps: History[float | None] = History()
+        self._last_sample: datetime | None = None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -124,15 +130,15 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             if last_state.state in self._attr_hvac_modes:
                 self._attr_hvac_mode = HVACMode(last_state.state)
         if (extra := await self.async_get_last_extra_data()) is not None:
-            self._valves = ValveHistory(
-                [
-                    (dt, is_open)
-                    for when, is_open in extra.as_dict().get("valve_history", [])
-                    if (dt := dt_util.parse_datetime(when)) is not None
-                ]
-            )
+            data = extra.as_dict()
+            self._valves = _parse_history(data.get("valve_history", []))
+            self._temps = _parse_history(data.get("floor_temp_history", []))
+            if self._estimator is not None and "estimator" in data:
+                self._estimator.restore(data["estimator"])
         if (state := self.hass.states.get(self._valve_entity)) is not None:
             self._record_valve(state.state, state.last_changed)
+        if (state := self.hass.states.get(self._floor_temp_entity)) is not None:
+            self._temps.add(state.last_changed, self.current_temperature)
 
         self.async_on_remove(
             async_track_state_change_event(
@@ -150,14 +156,13 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
 
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
-        return RestoredExtraData(
-            {
-                "valve_history": [
-                    (when.isoformat(), is_open)
-                    for when, is_open in self._valves.as_list()
-                ]
-            }
-        )
+        data: dict[str, Any] = {
+            "valve_history": _dump_history(self._valves),
+            "floor_temp_history": _dump_history(self._temps),
+        }
+        if self._estimator is not None:
+            data["estimator"] = self._estimator.as_dict()
+        return RestoredExtraData(data)
 
     @property
     def _watched_entities(self) -> list[str]:
@@ -199,6 +204,14 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
                 if self._forecast
                 else {}
             ),
+            **(
+                {
+                    "estimated_heating_rate": round(self._estimator.heating_rate, 3),
+                    "estimated_cooling_rate": round(self._estimator.cooling_rate, 3),
+                }
+                if self._estimator
+                else {}
+            ),
         }
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -218,10 +231,26 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             new_state := event.data["new_state"]
         ):
             self._record_valve(new_state.state, new_state.last_changed)
+        if event.data["entity_id"] == self._floor_temp_entity and (
+            new_state := event.data["new_state"]
+        ):
+            self._temps.add(new_state.last_changed, self.current_temperature)
         self.hass.async_create_task(self._async_control())
 
     @callback
-    def _async_tick(self, _now: datetime) -> None:
+    def _async_tick(self, now: datetime) -> None:
+        if self._estimator is not None and (
+            self._last_sample is None
+            or now - self._last_sample >= RateEstimator.INTERVAL
+        ):
+            self._last_sample = now
+            if self._estimator.sample(self._valves, self._temps, now):
+                _LOGGER.debug(
+                    "%s: estimated heating %.3f, cooling %.3f °C/h",
+                    self.entity_id,
+                    self._estimator.heating_rate,
+                    self._estimator.cooling_rate,
+                )
         self.hass.async_create_task(self._async_control())
 
     def _record_valve(self, state: str, when: datetime) -> None:
@@ -233,16 +262,19 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
     def _make_forecast(self, floor_temp: float | None) -> Forecast | None:
         if self._model is None or floor_temp is None:
             return None
+        model = self._estimator.model if self._estimator else self._model
         now = dt_util.utcnow()
-        self._valves.prune(now - self._model.memory - self._min_switch_interval)
+        keep = max(self._min_switch_interval, RateEstimator.WINDOW)
+        self._valves.prune(now - model.memory - keep)
+        self._temps.prune(now - RateEstimator.WINDOW)
         valve_open = self._valves.state_at(now)
         if valve_open is None:
             return None
         last_change = self._valves.last_change
         return Forecast(
             valve_open=valve_open,
-            max_if_closed=forecast(self._model, self._valves, now, floor_temp, False)[1],
-            min_if_open=forecast(self._model, self._valves, now, floor_temp, True)[0],
+            max_if_closed=forecast(model, self._valves, now, floor_temp, False)[1],
+            min_if_open=forecast(model, self._valves, now, floor_temp, True)[0],
             can_switch=last_change is None
             or now - last_change >= self._min_switch_interval,
         )
@@ -305,3 +337,17 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             return float(state.state)
         except ValueError:
             return None
+
+
+def _parse_history[T](data: list) -> History[T]:
+    return History(
+        [
+            (when, value)
+            for timestamp, value in data
+            if (when := dt_util.parse_datetime(timestamp)) is not None
+        ]
+    )
+
+
+def _dump_history(history: History) -> list:
+    return [(when.isoformat(), value) for when, value in history.as_list()]

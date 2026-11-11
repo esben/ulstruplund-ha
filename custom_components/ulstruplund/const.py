@@ -21,6 +21,7 @@ CONF_LAG = "lag"
 CONF_HEATING_RATE = "heating_rate"
 CONF_COOLING_RATE = "cooling_rate"
 CONF_MIN_SWITCH_INTERVAL = "min_switch_interval"
+CONF_ADAPTIVE = "adaptive"
 CONTROL_HYSTERESIS = "hysteresis"
 CONTROL_PREDICTIVE = "predictive"
 

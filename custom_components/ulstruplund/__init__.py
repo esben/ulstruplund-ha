@@ -10,6 +10,7 @@ from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    CONF_ADAPTIVE,
     CONF_COLD_TOLERANCE,
     CONF_CONTROL,
     CONF_COOLING_RATE,
@@ -103,6 +104,7 @@ FLOOR_HEATING_SCHEMA = vol.Schema(
         vol.Optional(
             CONF_MIN_SWITCH_INTERVAL, default=DEFAULT_MIN_SWITCH_INTERVAL
         ): cv.time_period,
+        vol.Optional(CONF_ADAPTIVE, default=True): cv.boolean,
     }
 )
 

@@ -3,8 +3,10 @@
 from datetime import timedelta
 
 from freezegun.api import FrozenDateTimeFactory
+import pytest
 
 from homeassistant.core import HomeAssistant, State
+from homeassistant.helpers.restore_state import async_get as async_get_restore_state
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
@@ -143,3 +145,64 @@ async def test_predictive_requires_model(hass):
     config = {DOMAIN: {"floor_heating": [dict(CONFIG[DOMAIN]["floor_heating"][0])]}}
     del config[DOMAIN]["floor_heating"][0]["lag"]
     assert not await async_setup_component(hass, DOMAIN, config)
+
+
+async def test_rates_estimated(hass, freezer, hass_storage):
+    open_calls, close_calls = await setup(hass, freezer, floor="31.9", valve="closed")
+    state = hass.states.get(ENTITY)
+    assert state.attributes["estimated_heating_rate"] == 0.55
+    assert state.attributes["estimated_cooling_rate"] == 0.38
+
+    # Valve stays closed (mocked) while the floor cools faster than modelled:
+    # 0.6 °C/h instead of 0.38
+    temp = 31.9
+    for _ in range(4 * 6):
+        await tick(hass, freezer, 10)
+        temp -= 0.1
+        hass.states.async_set(FLOOR, f"{temp:.1f}")
+        await hass.async_block_till_done()
+    assert hass.states.get(ENTITY).attributes["estimated_cooling_rate"] > 0.45
+
+    # The state saved for restarts is JSON serializable and has it all
+    await async_get_restore_state(hass).async_dump_states()
+    saved = next(
+        entry["extra_data"]
+        for entry in hass_storage["core.restore_state"]["data"]
+        if entry["state"]["entity_id"] == ENTITY
+    )
+    assert saved["estimator"]["rates"][1] > 0.45
+    assert saved["valve_history"][-1][1] is False
+    assert saved["floor_temp_history"][-1][1] == pytest.approx(29.5)
+
+
+async def test_estimator_restored(hass, freezer):
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (
+                State(ENTITY, "heat", {"temperature": 32.0}),
+                {
+                    "valve_history": [],
+                    "floor_temp_history": [],
+                    "estimator": {
+                        "initial": [0.55, 0.38],
+                        "rates": [0.6, 0.42],
+                        "p": [[0.001, 0.0], [0.0, 0.001]],
+                    },
+                },
+            )
+        ],
+    )
+    await setup(hass, freezer, floor="32.0", valve="closed")
+    state = hass.states.get(ENTITY)
+    assert state.attributes["estimated_heating_rate"] == 0.6
+    assert state.attributes["estimated_cooling_rate"] == 0.42
+
+
+async def test_not_adaptive(hass, freezer):
+    conf = dict(CONFIG[DOMAIN]["floor_heating"][0], adaptive=False)
+    hass.states.async_set(VALVE, "closed")
+    hass.states.async_set(FLOOR, "32.0")
+    assert await async_setup_component(hass, DOMAIN, {DOMAIN: {"floor_heating": [conf]}})
+    await hass.async_block_till_done()
+    assert "estimated_heating_rate" not in hass.states.get(ENTITY).attributes
