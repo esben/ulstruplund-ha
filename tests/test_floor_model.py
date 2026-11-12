@@ -16,6 +16,7 @@ from custom_components.ulstruplund.floor_model import (
     History as ValveHistory,
     RateEstimator,
     forecast,
+    time_weighted_mean,
 )
 
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
@@ -45,6 +46,19 @@ def test_valve_history():
 
     h.prune(NOW - timedelta(minutes=45))
     assert h.as_list() == [(NOW - timedelta(minutes=60), False), (NOW - timedelta(minutes=30), True)]
+
+
+def test_time_weighted_mean():
+    m = timedelta(minutes=1)
+    h: History[float | None] = History([(NOW - 10 * m, 30.0), (NOW - 4 * m, 36.0)])
+    assert time_weighted_mean(h, NOW - 5 * m, NOW) == pytest.approx(34.8)
+    # Before the first change, the first value is assumed
+    assert time_weighted_mean(h, NOW - 20 * m, NOW - 5 * m) == 30.0
+    # Unknown values are left out
+    h.add(NOW - 2 * m, None)
+    assert time_weighted_mean(h, NOW - 5 * m, NOW) == pytest.approx(34.0)
+    assert time_weighted_mean(h, NOW - m, NOW) is None
+    assert time_weighted_mean(History(), NOW - m, NOW) is None
 
 
 def test_forecast_long_closed():

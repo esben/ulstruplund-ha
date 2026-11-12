@@ -88,6 +88,31 @@ class History[T]:
 type ValveHistory = History[bool]
 
 
+def time_weighted_mean(
+    history: History[float | None], start: datetime, end: datetime
+) -> float | None:
+    """Mean over [start, end], each value weighted by how long it was current.
+
+    Unknown (None) values are left out; None if no value is known.
+    """
+    if end <= start:
+        return history.state_at(end)
+    total = seconds = 0.0
+    t = start
+    changes = history.as_list()
+    for k, (_, value) in enumerate(changes):
+        if k + 1 < len(changes) and changes[k + 1][0] <= start:
+            continue
+        until = min(changes[k + 1][0], end) if k + 1 < len(changes) else end
+        if value is not None and until > t:
+            total += value * (until - t).total_seconds()
+            seconds += (until - t).total_seconds()
+        t = max(t, until)
+        if t >= end:
+            break
+    return total / seconds if seconds else None
+
+
 def lagged_signal(
     model: FloorModel,
     history: History[bool],

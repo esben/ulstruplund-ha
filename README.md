@@ -40,7 +40,7 @@ ulstruplund:
 | `min_temp` / `max_temp` | 15.0 / 35.0 | Setpoint range in the UI |
 | `cold_tolerance` | 0.5 | Open when floor is this much below setpoint |
 | `hot_tolerance` | 0.0 | Close when floor is more than this above setpoint |
-| `reverse_flow_margin` | 0.5 | Close when outflow exceeds inflow by more than this |
+| `reverse_flow_margin` | 0.5 | Close when outflow exceeds inflow by more than this (5-minute averages) |
 | `control` | `hysteresis` | `hysteresis` or `predictive` (see below) |
 | `dead_time`, `lag` | | Floor model, required for predictive control |
 | `heating_rate`, `cooling_rate` | | Floor model (°C/h), required for predictive control |

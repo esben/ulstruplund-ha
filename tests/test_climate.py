@@ -86,20 +86,55 @@ async def test_no_call_when_valve_already_right(hass: HomeAssistant):
     assert hass.states.get(ENTITY).attributes["hvac_action"] == HVACAction.HEATING
 
 
-async def test_closes_on_reverse_flow(hass: HomeAssistant):
-    open_calls, close_calls = await setup(hass, floor="30.0", valve="open")
-
-    hass.states.async_set(OUTFLOW, "36.0")
-    await hass.async_block_till_done()
-    assert len(close_calls) == 1
-    assert hass.states.get(ENTITY).attributes["control_reason"] == "reverse_flow"
-
-
 async def tick(hass: HomeAssistant, freezer, minutes: int) -> None:
     for _ in range(minutes):
         freezer.tick(timedelta(minutes=1))
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
+
+
+async def test_closes_on_reverse_flow(hass: HomeAssistant, freezer):
+    open_calls, close_calls = await setup(hass, floor="30.0", valve="open")
+
+    # Inflow 35: the 5-minute mean outflow exceeds 35.5 after 4.6 minutes
+    hass.states.async_set(OUTFLOW, "36.0")
+    await hass.async_block_till_done()
+    await tick(hass, freezer, 4)
+    assert not close_calls
+    await tick(hass, freezer, 1)
+    assert close_calls
+    assert hass.states.get(ENTITY).attributes["control_reason"] == "reverse_flow"
+
+
+async def test_ignores_brief_reverse_flow(hass: HomeAssistant, freezer):
+    # Inflow drops, and the outflow sensor updates a moment later
+    open_calls, close_calls = await setup(
+        hass, floor="30.0", valve="open", inflow="41.6", outflow="39.2"
+    )
+    for _ in range(10):
+        hass.states.async_set(INFLOW, "36.3")
+        await hass.async_block_till_done()
+        freezer.tick(timedelta(seconds=1))
+        hass.states.async_set(OUTFLOW, "33.6")
+        await hass.async_block_till_done()
+        await tick(hass, freezer, 1)
+        hass.states.async_set(INFLOW, "41.6")
+        await hass.async_block_till_done()
+        freezer.tick(timedelta(seconds=1))
+        hass.states.async_set(OUTFLOW, "39.2")
+        await tick(hass, freezer, 1)
+    assert not close_calls
+
+
+async def test_closes_on_intermittent_reverse_flow(hass: HomeAssistant, freezer):
+    open_calls, close_calls = await setup(hass, floor="30.0", valve="open")
+    # Inflow 35, outflow 38 and 34 every other minute: mean outflow 36
+    for _ in range(5):
+        hass.states.async_set(OUTFLOW, "38.0")
+        await tick(hass, freezer, 1)
+        hass.states.async_set(OUTFLOW, "34.0")
+        await tick(hass, freezer, 1)
+    assert close_calls
 
 
 async def test_closes_when_floor_sensor_unavailable(hass: HomeAssistant, freezer):

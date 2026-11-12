@@ -59,12 +59,23 @@ from .const import (
     DOMAIN,
 )
 from .floor_control import Decision, Forecast, ValveCommand, decide
-from .floor_model import STEP, FloorModel, History, RateEstimator, forecast
+from .floor_model import (
+    STEP,
+    FloorModel,
+    History,
+    RateEstimator,
+    forecast,
+    time_weighted_mean,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 # How long the floor sensor may be unavailable before closing the valve
 SENSOR_GRACE = timedelta(minutes=5)
+# Inflow and outflow temperatures are averaged over this window for the reverse
+# flow check. The sensors update a moment apart, so a quick inflow drop looks
+# like reverse flow until the outflow sensor catches up.
+FLOW_WINDOW = timedelta(minutes=5)
 
 
 async def async_setup_platform(
@@ -124,6 +135,8 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
         self._temps: History[float | None] = History()
         self._last_sample: datetime | None = None
         self._floor_unavailable_since: datetime | None = None
+        self._inflow: History[float | None] = History()
+        self._outflow: History[float | None] = History()
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -143,6 +156,9 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             self._record_valve(state.state, state.last_changed)
         if (state := self.hass.states.get(self._floor_temp_entity)) is not None:
             self._temps.add(state.last_changed, self.current_temperature)
+        for entity, history in self._flow_histories:
+            if (state := self.hass.states.get(entity)) is not None:
+                history.add(state.last_changed, self._float_state(entity))
 
         self.async_on_remove(
             async_track_state_change_event(
@@ -177,6 +193,17 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
                 self._valve_entity,
                 self._inflow_entity,
                 self._outflow_entity,
+            )
+            if entity is not None
+        ]
+
+    @property
+    def _flow_histories(self) -> list[tuple[str, History[float | None]]]:
+        return [
+            (entity, history)
+            for entity, history in (
+                (self._inflow_entity, self._inflow),
+                (self._outflow_entity, self._outflow),
             )
             if entity is not None
         ]
@@ -239,6 +266,11 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
             new_state := event.data["new_state"]
         ):
             self._temps.add(new_state.last_changed, self.current_temperature)
+        for entity, history in self._flow_histories:
+            if event.data["entity_id"] == entity and (
+                new_state := event.data["new_state"]
+            ):
+                history.add(new_state.last_changed, self._float_state(entity))
         self.hass.async_create_task(self._async_control())
 
     @callback
@@ -290,13 +322,17 @@ class FloorThermostat(ClimateEntity, RestoreEntity):
                 self._floor_unavailable_since = now
         else:
             self._floor_unavailable_since = None
+        for _, history in self._flow_histories:
+            history.prune(now - FLOW_WINDOW)
+        inflow_temp = time_weighted_mean(self._inflow, now - FLOW_WINDOW, now)
+        outflow_temp = time_weighted_mean(self._outflow, now - FLOW_WINDOW, now)
         self._forecast = self._make_forecast(self.current_temperature)
         decision = decide(
             enabled=self._attr_hvac_mode == HVACMode.HEAT,
             setpoint=self._attr_target_temperature,
             floor_temp=self.current_temperature,
-            inflow_temp=self._float_state(self._inflow_entity),
-            outflow_temp=self._float_state(self._outflow_entity),
+            inflow_temp=inflow_temp,
+            outflow_temp=outflow_temp,
             cold_tolerance=self._cold_tolerance,
             hot_tolerance=self._hot_tolerance,
             reverse_flow_margin=self._reverse_flow_margin,
