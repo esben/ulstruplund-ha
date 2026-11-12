@@ -167,15 +167,15 @@ turned off after it gets light.
 
 ## Deployment
 
-Install via [HACS](https://hacs.xyz/):
+Install via Marketplace (formerly HACS):
 
-1. HACS → ⋮ → Custom repositories → add
+1. Marketplace → ⋮ → Custom repositories → add
    `https://github.com/esben/ulstruplund-ha` with type "Integration".
-2. Search for "Ulstruplund" in HACS and download it.
+2. Search for "Ulstruplund" in Marketplace and download it.
 3. Add the `ulstruplund:` configuration to `configuration.yaml` and restart
    Home Assistant.
 
-Updates appear in HACS like for any other integration; restart Home
+Updates appear in Marketplace like for any other integration; restart Home
 Assistant after installing one.
 
 Remove the corresponding pyscript code (`heat.py`, `light.py`) at the same
